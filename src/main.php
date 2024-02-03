@@ -17,7 +17,9 @@ function main():Unsafe {
             or yield $error;
             
             $result = Superstyle::render($file_name, $content);
-            print_r($result);
+            echo PHP_EOL;
+            echo json_encode($result, JSON_PRETTY_PRINT);
+            echo PHP_EOL;
         } catch(Throwable $error) {
             yield $error;
         }
