@@ -2,17 +2,13 @@
   @return "hello #{$name}";
 }
 
-App {
+#app {
   background: #000;
   color: #fff;
 
   $greeting: hello("world");
 
-  button {
-    &:active {
-      color: "red";
-    }
-
+  .btn {
     $counter: 0;
 
     $content: "click me (#{$counter})";

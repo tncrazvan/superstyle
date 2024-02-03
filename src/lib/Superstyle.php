@@ -1,11 +1,15 @@
 <?php
 namespace App;
 
+use function CatPaw\Core\error;
+use function CatPaw\Core\ok;
+use CatPaw\Core\Unsafe;
 use ScssPhp\ScssPhp\Block;
 use ScssPhp\ScssPhp\Block\CallableBlock;
+use ScssPhp\ScssPhp\Compiler;
 use ScssPhp\ScssPhp\Node\Number;
 use ScssPhp\ScssPhp\Parser;
-
+use Throwable;
 
 class Superstyle {
     private static function compile_interpolate(&$state, $child, false|callable $update = false) {
@@ -35,8 +39,8 @@ class Superstyle {
         $stack       = [];
         $expressions = array_slice($child, 1, count($child) - 4);
 
-        $primitive           = false;
-        $primitive_arguments = [];
+        $primitive          = false;
+        $primitiveArguments = [];
 
         foreach ($expressions as $child) {
             $type = is_array($child)?$child[0]:$child;
@@ -59,9 +63,9 @@ class Superstyle {
             $compiled = self::compile_value($state, $child);
 
             if ($primitive) {
-                $primitive_arguments[] = $compiled;
-                if (2 === count($primitive_arguments)) {
-                    $stack[] = $primitive(...$primitive_arguments);
+                $primitiveArguments[] = $compiled;
+                if (2 === count($primitiveArguments)) {
+                    $stack[] = $primitive(...$primitiveArguments);
                 }
                 continue;
             }
@@ -115,8 +119,8 @@ class Superstyle {
     }
 
     private static function &compile_value(&$state, $child, false|callable $update = false) {
-        $right_type = $child[0] ?? '';
-        $value      = match ($right_type) {
+        $rightType = $child[0] ?? '';
+        $value     = match ($rightType) {
             'keyword' => self::compile_keyword($state, $child),
             'number'  => self::compile_number($state, $child),
             'string'  => self::compile_string($state, $child),
@@ -125,7 +129,7 @@ class Superstyle {
             'var'     => self::compile_variable($state, $child),
         };
 
-        if ('string' === $right_type) {
+        if ('string' === $rightType) {
             if (is_array($value) && 1 === count($value)) {
                 $value = $value[0] ?? '';
             } else {
@@ -137,20 +141,20 @@ class Superstyle {
     }
 
     private static function compile_assign(&$state, $child) {
-        $left_type = $child[1][0] ?? '';
-        $left_name = $child[1][1] ?? '';
+        // $leftType = $child[1][0] ?? '';
+        $leftName = $child[1][1] ?? '';
 
-        if (!$left_name) {
+        if (!$leftName) {
             return '';
         }
 
         $subscribers = [];
-        if (isset($state[$left_name])) {
-            $subscribers = $state[$left_name]['subscribers'] ?? [];
-        } 
+        if (isset($state[$leftName])) {
+            $subscribers = $state[$leftName]['subscribers'] ?? [];
+        }
 
-        $set = function(&$state) use (&$left_name, &$child, &$subscribers) {
-            $state[$left_name] = [
+        $set = function(&$state) use (&$leftName, &$child, &$subscribers) {
+            $state[$leftName] = [
                 'type'        => 'variable',
                 'value'       => self::compile_value($state, $child[2]),
                 'subscribers' => $subscribers,
@@ -160,7 +164,7 @@ class Superstyle {
         self::compile_value($state, $child[2], $set);
 
         $set($state);
-        
+
 
         foreach ($subscribers as $subscriber) {
             $subscriber($state);
@@ -191,7 +195,7 @@ class Superstyle {
 
     private static function compile_function(&$state, CallableBlock $function) {
         $name = $function->name;
-        
+
         if (isset($state[$name])) {
             $stateLocal = $state[$name];
         } else {
@@ -233,17 +237,18 @@ class Superstyle {
     }
 
     private static function compile_block(&$state, Block $block) {
-        $name = $block->selectors[0][0][0];
-        if (is_array($name)) {
+        if (is_array($block->selectors[0][0][0] ?? false)) {
             return '';
         }
-        
+
+        $name = join($block->selectors[0][0]);
+
         if (isset($state[$name])) {
             $stateLocal = $state[$name];
         } else {
             $stateLocal = [...$state];
         }
-        
+
         foreach ($block->children as $child) {
             $type = $child[0];
             match ($type) {
@@ -254,8 +259,9 @@ class Superstyle {
         }
 
         $state[$name] = [
-            'type'  => 'block',
-            'value' => &$stateLocal,
+            'type'      => 'block',
+            'value'     => &$stateLocal,
+            'selectors' => $block->selectors,
         ];
 
         return '';
@@ -275,7 +281,7 @@ class Superstyle {
         }
     }
 
-    private static function toHtml(&$state, string $component = '') {
+    private static function toHtml(&$state, array $selectors) {
         $result = '';
         foreach ($state as $key => $value) {
             if ('function' === $value['type']) {
@@ -283,7 +289,7 @@ class Superstyle {
             }
 
             if ('block' === $value['type']) {
-                $result .= self::toHtml($value['value'], $key);
+                $result .= self::toHtml($value['value'], $value['selectors']);
                 continue;
             }
 
@@ -293,10 +299,43 @@ class Superstyle {
 
             $result .= $value['value'];
         }
-        
-        if ($component) {
+
+        if ($selectors) {
+            $tag     = 'div';
+            $id      = '';
+            $classes = [];
+
+            $settingTag    = true;
+            $settingId     = false;
+            $addingToClass = false;
+
+            foreach ($selectors[0][0] as $selector) {
+                if ('.' === $selector) {
+                    $settingTag    = false;
+                    $settingId     = false;
+                    $addingToClass = true;
+                } else if ('#' === $selector && !$addingToClass) {
+                    $settingTag = false;
+                    $settingId  = true;
+                }
+
+                if ($settingTag) {
+                    $tag = addslashes($selector);
+                } if ($settingId) {
+                    $id = 'id="'.addslashes($selector).'"';
+                } else if ($addingToClass) {
+                    $classes[] = addslashes($selector);
+                }
+            }
+
+            if ($classes) {
+                $stringifiedClass = 'class="'.join(' ', $classes).'"';
+            } else {
+                $stringifiedClass = '';
+            }
+
             return <<<HTML
-                <{$component}>{$result}</{$component}>
+                <{$tag} $id $stringifiedClass>{$result}</{$tag}>
                 HTML;
         }
 
@@ -304,21 +343,27 @@ class Superstyle {
     }
 
 
-    public static function render(string $file_name, string $content, array $state = []) {
-        $parser = new Parser($file_name);
-        $block  = $parser->parse($content);
-        self::compile($state, $block->children);
+    /**
+     * @param  string                 $file_name
+     * @param  string                 $content
+     * @param  array                  $state
+     * @return Unsafe<CompiledResult>
+     */
+    public static function render(string $file_name, string $content, array $state = []):Unsafe {
+        try {
+            $parser = new Parser($file_name);
+            $block  = $parser->parse($content);
+            self::compile($state, $block->children);
 
-        $state['App']['value']['button']['value']['click']['compiled']();
-        $state['App']['value']['button']['value']['click']['compiled']();
-        $state['App']['value']['button']['value']['click']['compiled']();
+            $cssCompiler = new Compiler();
+            $cssCompiler->compileString($content);
 
-        $cssCompiler = new \ScssPhp\ScssPhp\Compiler();
-        $cssCompiler->compileString($content);
-
-        return [
-            'html' => self::toHtml($state),
-            'css'  => $cssCompiler->compileString($content)->getCss(),
-        ];
+            return ok(new CompiledResult(
+                html: self::toHtml($state, []),
+                css: $cssCompiler->compileString($content)->getCss(),
+            ));
+        } catch(Throwable $error) {
+            return error($error);
+        }
     }
 }
