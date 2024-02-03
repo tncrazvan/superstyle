@@ -8,14 +8,21 @@ use ScssPhp\ScssPhp\Parser;
 
 
 class Superstyle {
-    private static function compile_interpolate(&$state, $child) {
+    private static function compile_interpolate(&$state, $child, false|callable $update = false) {
         $result = '';
         foreach ($child as $chunk) {
             if (is_array($chunk)) {
                 $type = $chunk[0];
-                $result .= match ($type) {
-                    'interpolate' => $state[$chunk[1][1]],
-                };
+                if ('interpolate' === $type) {
+                    if (isset($chunk[1][2][0])) {
+                        $result .= $chunk[1][2][0];
+                    } else {
+                        $result .= $state[$chunk[1][1]]['value'];
+                        if ($update) {
+                            $state[$chunk[1][1]]['subscribers'][] = $update;
+                        }
+                    }
+                }
                 continue;
             }
             $result .= $chunk;
@@ -25,7 +32,7 @@ class Superstyle {
 
 
     private static function compile_expression(&$state, $child) {
-        $result      = '';
+        $stack       = [];
         $expressions = array_slice($child, 1, count($child) - 4);
 
         $primitive           = false;
@@ -54,15 +61,19 @@ class Superstyle {
             if ($primitive) {
                 $primitive_arguments[] = $compiled;
                 if (2 === count($primitive_arguments)) {
-                    $result .= $primitive(...$primitive_arguments);
+                    $stack[] = $primitive(...$primitive_arguments);
                 }
                 continue;
             }
 
-            $result .= $compiled;
+            $stack[] = $compiled;
         }
 
-        return $result;
+        if (count($stack) === 1 && is_float($stack[0])) {
+            return $stack[0];
+        }
+
+        return join($stack);
     }
 
     private static function compile_string(&$state, $child) {
@@ -79,7 +90,10 @@ class Superstyle {
             }
             $value            = self::compile_value($state, $argument[1]);
             $name             = $function->args[$index][0];
-            $arguments[$name] = $value;
+            $arguments[$name] = [
+                'type'  => 'parameter',
+                'value' => $value,
+            ];
         }
         $compiled = $state[$child[1]]['compiled'];
         return $compiled($arguments);
@@ -93,10 +107,14 @@ class Superstyle {
     }
 
     private static function compile_number(&$state, Number $child) {
-        return (string)$child->getDimension();
+        return (float)$child->getDimension();
     }
 
-    private static function compile_value(&$state, $child) {
+    private static function compile_variable(&$state, $child) {
+        return $state[$child[1]]['value'];
+    }
+
+    private static function &compile_value(&$state, $child, false|callable $update = false) {
         $right_type = $child[0] ?? '';
         $value      = match ($right_type) {
             'keyword' => self::compile_keyword($state, $child),
@@ -104,13 +122,14 @@ class Superstyle {
             'string'  => self::compile_string($state, $child),
             'fncall'  => self::compile_function_call($state, $child),
             'exp'     => self::compile_expression($state, $child),
+            'var'     => self::compile_variable($state, $child),
         };
 
         if ('string' === $right_type) {
             if (is_array($value) && 1 === count($value)) {
                 $value = $value[0] ?? '';
             } else {
-                $value = self::compile_interpolate($state, $value);
+                $value = self::compile_interpolate($state, $value, $update);
             }
         }
 
@@ -125,10 +144,28 @@ class Superstyle {
             return '';
         }
 
-        $right_type  = $child[2][0] ?? '';
-        $right_value = self::compile_value($state, $child[2]);
+        $subscribers = [];
+        if (isset($state[$left_name])) {
+            $subscribers = $state[$left_name]['subscribers'] ?? [];
+        } 
 
-        $state[$left_name] = $right_value;
+        $set = function(&$state) use (&$left_name, &$child, &$subscribers) {
+            $state[$left_name] = [
+                'type'        => 'variable',
+                'value'       => self::compile_value($state, $child[2]),
+                'subscribers' => $subscribers,
+            ];
+        };
+
+        self::compile_value($state, $child[2], $set);
+
+        $set($state);
+        
+
+        foreach ($subscribers as $subscriber) {
+            $subscriber($state);
+        }
+
 
         return '';
     }
@@ -153,25 +190,43 @@ class Superstyle {
     }
 
     private static function compile_function(&$state, CallableBlock $function) {
-        $name       = $function->name;
-        $stateLocal = [...$state];
+        $name = $function->name;
+        
+        if (isset($state[$name])) {
+            $stateLocal = $state[$name];
+        } else {
+            $stateLocal = [...$state];
+        }
 
-        $compiled = function(array $state = []) use (
+        $compiled = function(array $arguments = []) use (
             $function,
+            &$state,
             &$stateLocal,
         ) {
             $stateLocal = [
                 ...$stateLocal,
-                ...$state,
+                ...$arguments,
             ];
-            $result = '';
+            $stack = [];
             foreach ($function->children as $child) {
-                $result .= self::compile_operation($stateLocal, $child);
+                $stack[] = self::compile_operation($stateLocal, $child);
             }
 
-            return $result;
+
+            foreach ($stateLocal as $key => $valueLocal) {
+                if (!isset($state[$key]) || $state[$key] !== $valueLocal) {
+                    $state[$key] = $valueLocal;
+                }
+            }
+
+            if (count($stack) === 1 && is_float($stack[0])) {
+                return $stack[0];
+            }
+
+            return $stack;
         };
         $state[$name] = [
+            'type'     => 'function',
             'function' => $function,
             'compiled' => $compiled,
         ];
@@ -182,8 +237,13 @@ class Superstyle {
         if (is_array($name)) {
             return '';
         }
-        $stateLocal = [...$state];
-
+        
+        if (isset($state[$name])) {
+            $stateLocal = $state[$name];
+        } else {
+            $stateLocal = [...$state];
+        }
+        
         foreach ($block->children as $child) {
             $type = $child[0];
             match ($type) {
@@ -193,7 +253,10 @@ class Superstyle {
             };
         }
 
-        $state[$name] = $stateLocal;
+        $state[$name] = [
+            'type'  => 'block',
+            'value' => &$stateLocal,
+        ];
 
         return '';
     }
@@ -202,7 +265,7 @@ class Superstyle {
      * @param  array $state
      * @return void
      */
-    private static function compile(array $blocks, array &$state = []) {
+    private static function compile(array &$state = [], array $blocks) {
         foreach ($blocks as $block) {
             [$type, $child] = $block;
             match ($type) {
@@ -215,12 +278,12 @@ class Superstyle {
     private static function toHtml(&$state, string $component = '') {
         $result = '';
         foreach ($state as $key => $value) {
-            if (isset($value['function'])) {
+            if ('function' === $value['type']) {
                 continue;
             }
 
-            if (is_array($value)) {
-                $result .= self::toHtml($value, $key);
+            if ('block' === $value['type']) {
+                $result .= self::toHtml($value['value'], $key);
                 continue;
             }
 
@@ -228,7 +291,7 @@ class Superstyle {
                 continue;
             }
 
-            $result .= $value;
+            $result .= $value['value'];
         }
         
         if ($component) {
@@ -241,11 +304,14 @@ class Superstyle {
     }
 
 
-    public static function render(string $file_name, string $content) {
+    public static function render(string $file_name, string $content, array $state = []) {
         $parser = new Parser($file_name);
         $block  = $parser->parse($content);
-        $state  = [];
-        self::compile($block->children, $state);
+        self::compile($state, $block->children);
+
+        $state['App']['value']['button']['value']['click']['compiled']();
+        $state['App']['value']['button']['value']['click']['compiled']();
+        $state['App']['value']['button']['value']['click']['compiled']();
 
         $cssCompiler = new \ScssPhp\ScssPhp\Compiler();
         $cssCompiler->compileString($content);

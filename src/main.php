@@ -15,7 +15,7 @@ function main():Unsafe {
     
             $content = $app->readAll()->await()->try($error)
             or yield $error;
-
+            
             $result = Superstyle::render($file_name, $content);
             print_r($result);
         } catch(Throwable $error) {

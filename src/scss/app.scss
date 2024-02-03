@@ -3,12 +3,10 @@
 }
 
 App {
-  background: #fff;
+  background: #000;
+  color: #fff;
 
-  $greeting: hello(
-    $name: "world",
-  );
-  $content: "click this button below";
+  $greeting: hello("world");
 
   button {
     &:active {
@@ -17,7 +15,7 @@ App {
 
     $counter: 0;
 
-    $content: "counter is #{$counter}";
+    $content: "click me (#{$counter})";
 
     @function click() {
       $counter: $counter + 1;
