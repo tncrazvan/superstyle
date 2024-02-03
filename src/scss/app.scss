@@ -5,8 +5,10 @@
 App {
   background: #fff;
 
-  $greeting: hello("world");
-  content: "click this button below";
+  $greeting: hello(
+    $name: "world",
+  );
+  $content: "click this button below";
 
   button {
     &:active {
@@ -17,11 +19,7 @@ App {
 
     $content: "counter is #{$counter}";
 
-    @function mount() {
-      @debug "mounted";
-    }
-
-    @function activate() {
+    @function click() {
       $counter: $counter + 1;
     }
   }
