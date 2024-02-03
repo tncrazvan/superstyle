@@ -1,0 +1,4 @@
+App {
+  --name: state "hello";
+  --text: state "hello {--name}";
+}

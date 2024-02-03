@@ -1,0 +1,28 @@
+@function hello($name) {
+  @return "hello #{$name}";
+}
+
+App {
+  background: #fff;
+
+  $greeting: hello("world");
+  content: "click this button below";
+
+  button {
+    &:active {
+      color: "red";
+    }
+
+    $counter: 0;
+
+    $content: "counter is #{$counter}";
+
+    @function mount() {
+      @debug "mounted";
+    }
+
+    @function activate() {
+      $counter: $counter + 1;
+    }
+  }
+}
