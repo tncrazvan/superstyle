@@ -12,7 +12,7 @@ use ScssPhp\ScssPhp\Parser;
 use Throwable;
 
 class Superstyle {
-    private static function compile_interpolate(&$state, $child, false|callable $update = false) {
+    private static function compile_interpolate(&$state, $child) {
         $result = '';
         foreach ($child as $chunk) {
             if (is_array($chunk)) {
@@ -21,10 +21,7 @@ class Superstyle {
                     if (isset($chunk[1][2][0])) {
                         $result .= $chunk[1][2][0];
                     } else {
-                        $result .= $state[$chunk[1][1]]['value'];
-                        if ($update) {
-                            $state[$chunk[1][1]]['subscribers'][] = $update;
-                        }
+                        $result .= $state[$chunk[1][1]];
                     }
                 }
                 continue;
@@ -84,23 +81,55 @@ class Superstyle {
         return $child[2] ?? '';
     }
 
+    private static function findClosestFunctionByName(&$state, string $name):false|ClosestFunction {
+        foreach ($state['__functions'] as $nameLocal => $block) {
+            if ($name === $nameLocal) {
+                return new ClosestFunction(
+                    compiled: $state[$nameLocal],
+                    block: $block,
+                );
+            }
+        }
+        if (isset($state['__parent']) && $state['__parent']) {
+            return self::findClosestFunctionByName($state['__parent'], $name);
+        }
+
+        return false;
+    }
+
+    private static function findClosesVariable(&$state, string $name):false|ClosestFunction {
+        foreach ($state['__functions'] as $nameLocal => $block) {
+            if ($name === $nameLocal) {
+                return new ClosestFunction(
+                    compiled: $state[$nameLocal],
+                    block: $block,
+                );
+            }
+        }
+        if (isset($state['__parent'])) {
+            return self::findClosestFunctionByName($state['__parent'], $name);
+        }
+
+        return false;
+    }
+
     private static function compile_function_call(&$state, $child) {
         $arguments = [];
-        /** @var CallableBlock $private static function */
-        $function = $state[$child[1]]['function'];
+
+        if (!$function = self::findClosestFunctionByName($state, $child[1])) {
+            return '';
+        }
+
+
         foreach ($child[2] as $index => $argument) {
             if ('null' === $argument[0]) {
                 break;
             }
             $value            = self::compile_value($state, $argument[1]);
-            $name             = $function->args[$index][0];
-            $arguments[$name] = [
-                'type'  => 'parameter',
-                'value' => $value,
-            ];
+            $name             = $function->block->args[$index][0];
+            $arguments[$name] = $value;
         }
-        $compiled = $state[$child[1]]['compiled'];
-        return $compiled($arguments);
+        return ($function->compiled)($arguments);
     }
 
     private static function compile_keyword(&$state, $child) {
@@ -115,10 +144,10 @@ class Superstyle {
     }
 
     private static function compile_variable(&$state, $child) {
-        return $state[$child[1]]['value'];
+        return $state[$child[1]];
     }
 
-    private static function &compile_value(&$state, $child, false|callable $update = false) {
+    private static function &compile_value(&$state, $child) {
         $rightType = $child[0] ?? '';
         $value     = match ($rightType) {
             'keyword' => self::compile_keyword($state, $child),
@@ -133,7 +162,7 @@ class Superstyle {
             if (is_array($value) && 1 === count($value)) {
                 $value = $value[0] ?? '';
             } else {
-                $value = self::compile_interpolate($state, $value, $update);
+                $value = self::compile_interpolate($state, $value);
             }
         }
 
@@ -148,28 +177,9 @@ class Superstyle {
             return '';
         }
 
-        $subscribers = [];
-        if (isset($state[$leftName])) {
-            $subscribers = $state[$leftName]['subscribers'] ?? [];
-        }
+        $state['__types'][$leftName] = 'variable';
 
-        $set = function(&$state) use (&$leftName, &$child, &$subscribers) {
-            $state[$leftName] = [
-                'type'        => 'variable',
-                'value'       => self::compile_value($state, $child[2]),
-                'subscribers' => $subscribers,
-            ];
-        };
-
-        self::compile_value($state, $child[2], $set);
-
-        $set($state);
-
-
-        foreach ($subscribers as $subscriber) {
-            $subscriber($state);
-        }
-
+        $state[$leftName] = self::compile_value($state, $child[2]);
 
         return '';
     }
@@ -184,139 +194,210 @@ class Superstyle {
         return '';
     }
 
-    private static function compile_operation(&$state, $child) {
+    private static function compile_operation(&$state, &$parameters, $child) {
         $operation = $child[0];
-        return match ($operation) {
-            'debug'  => self::compile_debug($state, $child),
-            'assign' => self::compile_assign($state, $child),
-            'return' => self::compile_return($state, $child),
+        $composite = [
+            ...$state,
+            ...$parameters,
+        ];
+        $result = match ($operation) {
+            'debug'  => self::compile_debug($composite, $child),
+            'assign' => self::compile_assign($composite, $child),
+            'return' => self::compile_return($composite, $child),
         };
+
+        foreach ($state as $key => $value) {
+            if (!isset($composite[$key])) {
+                continue;
+            }
+            $state[$key] = &$composite[$key];
+        }
+        return $result;
     }
 
-    private static function compile_function(&$state, CallableBlock $function) {
-        $name = $function->name;
+    private static function compile_function(&$state, &$stateOfParent, CallableBlock $function) {
+        $stateOfParent['__functions'][$function->name] = $function;
+        $stateOfParent['__types'][$function->name]     = 'function';
 
-        if (isset($state[$name])) {
-            $stateLocal = $state[$name];
-        } else {
-            $stateLocal = [...$state];
-        }
-
-        $compiled = function(array $arguments = []) use (
-            $function,
-            &$state,
-            &$stateLocal,
-        ) {
-            $stateLocal = [
-                ...$stateLocal,
-                ...$arguments,
-            ];
+        $compiled = function(array $parameters = []) use (&$stateOfParent, $function) {
             $stack = [];
             foreach ($function->children as $child) {
-                $stack[] = self::compile_operation($stateLocal, $child);
-            }
-
-
-            foreach ($stateLocal as $key => $valueLocal) {
-                if (!isset($state[$key]) || $state[$key] !== $valueLocal) {
-                    $state[$key] = $valueLocal;
-                }
+                $stack[] = self::compile_operation($stateOfParent, $parameters, $child);
             }
 
             if (count($stack) === 1 && is_float($stack[0])) {
                 return $stack[0];
             }
 
-            return $stack;
+            return join($stack);
         };
-        $state[$name] = [
-            'type'     => 'function',
-            'function' => $function,
-            'compiled' => $compiled,
-        ];
-    }
 
-    private static function compile_block(&$state, Block $block) {
-        if (is_array($block->selectors[0][0][0] ?? false)) {
-            return '';
-        }
-
-        $name = join($block->selectors[0][0]);
-
-        if (isset($state[$name])) {
-            $stateLocal = $state[$name];
-        } else {
-            $stateLocal = [...$state];
-        }
-
-        foreach ($block->children as $child) {
-            $type = $child[0];
-            match ($type) {
-                'assign'   => self::compile_assign($stateLocal, $child),
-                'block'    => self::compile_block($stateLocal, $child[1]),
-                'function' => self::compile_function($stateLocal, $child[1]),
-            };
-        }
-
-        $state[$name] = [
-            'type'      => 'block',
-            'value'     => &$stateLocal,
-            'selectors' => $block->selectors,
-        ];
-
-        return '';
+        $state = $compiled;
     }
 
     /**
-     * @param  array $state
-     * @return void
+     *
+     * @param  mixed        $state
+     * @param  Block        $block
+     * @return Unsafe<void>
      */
-    private static function compile(array &$state = [], array $blocks) {
-        foreach ($blocks as $block) {
-            [$type, $child] = $block;
-            match ($type) {
-                'function' => self::compile_function($state, $child),
-                'block'    => self::compile_block($state, $child),
-            };
-        }
+    private static function compile_block(&$state, Block $block):Unsafe {
+        $state['__functions'] = [];
+
+        return self::compile($state, $block->children);
     }
 
-    private static function toHtml(&$state, array $selectors) {
-        $result = '';
-        foreach ($state as $key => $value) {
-            if ('function' === $value['type']) {
-                continue;
-            }
+    /**
+     * @param  array        $state
+     * @return Unsafe<void>
+     */
+    private static function compile(array &$state, array $children):Unsafe {
+        if (!isset($state['__types'])) {
+            $state['__types'] = [];
+        }
+        if (!isset($state['__types'])) {
+            $state['__name'] = false;
+        }
+        if (!isset($state['__types'])) {
+            $state['__parent'] = false;
+        }
+        if (!isset($state['__types'])) {
+            $state['__functions'] = [];
+        }
+        if (!isset($state['__types'])) {
+            $state['__selectors'] = [];
+        }
+        foreach ($children as $child) {
+            [$type, $block] = $child;
 
-            if ('block' === $value['type']) {
-                $result .= self::toHtml($value['value'], $value['selectors']);
-                continue;
+            if ($block instanceof CallableBlock) {
+                $name                        = $block->name;
+                $state['__types'][$name]     = 'function';
+                $state['__functions'][$name] = $block;
+                $state['__selectors'][$name] = $block->selectors;
+                $state[$name]                = [
+                    '__name'   => $name,
+                    '__parent' => $state,
+                ];
+                self::compile_function($state[$name], $state, $block);
+            } else if ($block instanceof Block) {
+                $name = self::name($block->selectors ?? []);
+                if (!$name) {
+                    continue;
+                }
+                $state['__types'][$name]     = 'block';
+                $state['__blocks'][$name]    = $block;
+                $state['__selectors'][$name] = $block->selectors;
+                $state[$name]                = [
+                    '__name'   => $name,
+                    '__parent' => $state,
+                ];
+                self::compile_block($state[$name], $block)->try($error);
+                if ($error) {
+                    return error($error);
+                }
+            } else {
+                $type = $child[0];
+                match ($type) {
+                    'assign' => self::compile_assign($state, $child),
+                };
             }
-
-            if ('content' !== $key) {
-                continue;
-            }
-
-            $result .= $value['value'];
         }
 
-        if ($selectors) {
-            $tag     = 'div';
-            $id      = '';
-            $classes = [];
+        return ok();
+    }
 
-            $settingTag    = true;
-            $settingId     = false;
-            $addingToClass = false;
 
-            foreach ($selectors[0][0] as $selector) {
+    /**
+     *
+     * @param  array  $selectors
+     * @return string
+     */
+    private static function name(array $selectors):string {
+        $result             = '';
+        $addingToAttributes = false;
+        $nextIsId           = false;
+
+        foreach ($selectors[0] ?? [] as $group) {
+            foreach ($group as $selector) {
+                if (is_array($selector)) {
+                    return '';
+                }
+                if ($nextIsId) {
+                    return "#$selector";
+                }
+                if ('#' === $selector) {
+                    $nextIsId = true;
+                    continue;
+                }
+                if ('[' === $selector) {
+                    $addingToAttributes = true;
+                    continue;
+                } else if (']' === $selector) {
+                    $addingToAttributes = false;
+                    continue;
+                }
+
+                if ($addingToAttributes) {
+                    $attributeName  = addslashes($selector[2][0]);
+                    $attributeValue = addslashes((string)self::compile_value($state, $selector[2][1]));
+                    $attributes[]   = "$attributeName\"$attributeValue\"";
+                    continue;
+                }
+
+                $result .= $selector;
+            }
+        }
+        return $result;
+    }
+    /**
+     *
+     * @param  array                      $selectors
+     * @return Unsafe<ExtractedSelectors>
+     */
+    private static function selectors(array $selectors):Unsafe {
+        $tag        = '';
+        $id         = '';
+        $classes    = [];
+        $attributes = [];
+
+        $addingToAttributes = false;
+        $settingTag         = true;
+        $settingId          = false;
+        $addingToClass      = false;
+
+        $firstGroup = true;
+
+        foreach ($selectors[0] as $index => $group) {
+            $firstGroup = 0 === $index;
+            foreach ($group as $selector) {
                 if ('.' === $selector) {
-                    $settingTag    = false;
-                    $settingId     = false;
-                    $addingToClass = true;
-                } else if ('#' === $selector && !$addingToClass) {
-                    $settingTag = false;
-                    $settingId  = true;
+                    $addingToAttributes = false;
+                    $settingTag         = false;
+                    $settingId          = false;
+                    $addingToClass      = true;
+                    if (!$firstGroup) {
+                        return error("Component classes must be set only within the first group of selectors.");
+                    }
+                    continue;
+                } else if ('#' === $selector) {
+                    if ($id) {
+                        return error("You cannot set the id of a component more than once.");
+                    }
+                    $addingToAttributes = false;
+                    $settingTag         = false;
+                    $settingId          = true;
+                    $addingToClass      = false;
+                    continue;
+                } else if ('[' === $selector) {
+                    $addingToAttributes = true;
+                    $settingTag         = false;
+                    $settingId          = false;
+                    $addingToClass      = false;
+                    continue;
+                } else if (']' === $selector) {
+                    $addingToAttributes = false;
+                    continue;
                 }
 
                 if ($settingTag) {
@@ -325,45 +406,129 @@ class Superstyle {
                     $id = 'id="'.addslashes($selector).'"';
                 } else if ($addingToClass) {
                     $classes[] = addslashes($selector);
+                } else if ($addingToAttributes) {
+                    $attributeName  = addslashes($selector[2][0]);
+                    $attributeValue = addslashes((string)self::compile_value($state, $selector[2][1]));
+                    $attributes[]   = "$attributeName\"$attributeValue\"";
                 }
             }
-
-            if ($classes) {
-                $stringifiedClass = 'class="'.join(' ', $classes).'"';
-            } else {
-                $stringifiedClass = '';
-            }
-
-            return <<<HTML
-                <{$tag} $id $stringifiedClass>{$result}</{$tag}>
-                HTML;
         }
 
-        return $result;
+        if ($classes) {
+            $stringifiedClasses = 'class="'.join(' ', $classes).'"';
+        } else {
+            $stringifiedClasses = '';
+        }
+
+        if ($attributes) {
+            $stringifiedAttributes = join(' ', $attributes);
+        } else {
+            $stringifiedAttributes = '';
+        }
+
+        if (!$tag) {
+            $tag = 'div';
+        }
+        return ok(new ExtractedSelectors(
+            id: $id,
+            tag: $tag,
+            classes: $stringifiedClasses,
+            attributes: $stringifiedAttributes,
+        ));
+    }
+
+    /**
+     *
+     * @param  mixed          $state
+     * @param  array          $selectors
+     * @return Unsafe<string>
+     */
+    public static function toHtml(&$state, ExtractedSelectors $extractedSelectors):Unsafe {
+        $result      = $state['content'] ?? '';
+        $isPrimitive = true;
+        foreach ($state as $key => $stateLocal) {
+            if (!isset($state['__types'][$key])) {
+                continue;
+            }
+            if ('block' !== $state['__types'][$key]) {
+                continue;
+            }
+
+            $block = $state['__blocks'][$key];
+
+            /** @var Block $block */
+
+
+            $extractedSelectors = self::selectors($block->selectors)->try($error);
+
+            $content = self::toHtml($stateLocal, $extractedSelectors)->try($error);
+
+            if ($error) {
+                return error($error);
+            }
+
+            $isPrimitive = false;
+
+            $result .= $content;
+        }
+
+        if ($isPrimitive) {
+            return ok($result);
+        }
+
+        $tag        = $extractedSelectors->tag;
+        $id         = $extractedSelectors->id;
+        $classes    = $extractedSelectors->classes;
+        $attributes = $extractedSelectors->attributes;
+
+        return ok(<<<HTML
+            <{$tag} $id $classes $attributes>{$result}</{$tag}>
+            HTML);
     }
 
 
     /**
-     * @param  string                 $file_name
-     * @param  string                 $content
+     * @param  string                 $fileName
+     * @param  string                 $source
      * @param  array                  $state
      * @return Unsafe<CompiledResult>
      */
-    public static function render(string $file_name, string $content, array $state = []):Unsafe {
+    public static function compileAndRender(string $fileName, string $source, array $state = []):Unsafe {
         try {
-            $parser = new Parser($file_name);
-            $block  = $parser->parse($content);
-            self::compile($state, $block->children);
-
-            $cssCompiler = new Compiler();
-            $cssCompiler->compileString($content);
-
-            return ok(new CompiledResult(
-                html: self::toHtml($state, []),
-                css: $cssCompiler->compileString($content)->getCss(),
-            ));
+            $parser = new Parser($fileName);
+            $block  = $parser->parse($source);
+            self::compile($state, $block->children)->try($error);
+            if ($error) {
+                return error($error);
+            }
+            return self::renderState($fileName, $source, $state);
         } catch(Throwable $error) {
             return error($error);
         }
+    }
+
+    /**
+     *
+     * @param  string                 $fileName
+     * @param  string                 $source
+     * @param  array                  $state
+     * @return Unsafe<CompiledResult>
+     */
+    public static function renderState(string $fileName, string $source, array &$state) {
+        $html = self::toHtml($state, new ExtractedSelectors('id="main"'))->try($error);
+        if ($error) {
+            return error($error);
+        }
+
+        $cssCompiler = new Compiler();
+        $css         = $cssCompiler->compileString($source)->getCss();
+
+        return ok(new CompiledResult(
+            fileName: $fileName,
+            source: $source,
+            html: $html,
+            css: $css,
+            state: $state,
+        ));
     }
 }

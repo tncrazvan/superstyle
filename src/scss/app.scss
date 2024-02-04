@@ -1,20 +1,43 @@
-@function hello($name) {
-  @return "hello #{$name}";
+@function increaseByOne($value) {
+  @return $value + 1;
 }
 
 #app {
+  font-family: Arial, Helvetica, sans-serif;
+  position: fixed;
+  left: 0;
+  right: 0;
+  top: 0;
+  bottom: 0;
   background: #000;
   color: #fff;
+  display: grid;
+  justify-content: center;
+  align-content: center;
 
-  $greeting: hello("world");
+  #click.btn[hx-post="/increase"][hx-swap="outerHTML"][hx-target="#app"][hx-select="#app"] {
+    $active_background: rgb(195, 42, 11);
+    $active_text: #fff;
+    $inactive_text: #fff;
 
-  .btn {
-    $counter: 0;
+    $counter: 1;
+    $content: "Click me (#{$counter})";
 
-    $content: "click me (#{$counter})";
+    cursor: pointer;
+    border: 0.1rem solid transparent;
+    border-radius: 3rem;
+    padding: 1rem;
+    background: transparent;
+    color: $inactive_text;
 
-    @function click() {
+    &:hover {
+      background: $active_background;
+      color: $active_text;
+    }
+
+    @function increaseCounter() {
       $counter: $counter + 1;
+      $content: "Click me (#{$counter})";
     }
   }
 }
