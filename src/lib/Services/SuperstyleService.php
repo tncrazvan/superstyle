@@ -23,47 +23,47 @@ class SuperstyleService {
     /** @var array<string,CompiledResult> */
     private array $invalidating = [];
 
-    public function findCompiledResult(string $sessionId, string $fileName):false|CompiledResult {
+    public function findCompiledResult(string $workspace, string $fileName):false|CompiledResult {
         $result = false;
 
-        if (isset($this->compiled[$sessionId][$fileName])) {
-            return $this->compiled[$sessionId][$fileName] ?? false;
+        if (isset($this->compiled[$workspace][$fileName])) {
+            return $this->compiled[$workspace][$fileName] ?? false;
         }
 
         return $result;
     }
 
-    public function invalidate(string $sessionId, string $fileName):bool {
-        if (!$compiled = $this->findCompiledResult($sessionId, $fileName)) {
+    public function invalidate(string $workspace, string $fileName):bool {
+        if (!$compiled = $this->findCompiledResult($workspace, $fileName)) {
             return false;
         }
 
-        $this->invalidating[$sessionId][$fileName] = $compiled;
+        $this->invalidating[$workspace][$fileName] = $compiled;
 
         return true;
     }
 
     /**
      *
-     * @param  string                 $sessionId
+     * @param  string                 $workspace
      * @return Unsafe<CompiledResult>
      */
-    private function compile(string $sessionId, string $fileName) {
-        if (isset($this->invalidating[$sessionId][$fileName])) {
-            $compiled = $this->compiled[$sessionId][$fileName];
+    private function compile(string $workspace, string $fileName) {
+        if (isset($this->invalidating[$workspace][$fileName])) {
+            $compiled = $this->compiled[$workspace][$fileName];
 
             $compiled = Superstyle::renderState($compiled->fileName, $compiled->source, $compiled->state)->try($error);
             if ($error) {
                 return error("Couldn't compile file $compiled->fileName.\n$error");
             }
 
-            $this->compiled[$sessionId][$fileName] = $compiled;
+            $this->compiled[$workspace][$fileName] = $compiled;
 
             return ok($compiled);
         }
 
-        if (isset($this->compiled[$sessionId][$fileName])) {
-            return ok($this->compiled[$sessionId][$fileName]);
+        if (isset($this->compiled[$workspace][$fileName])) {
+            return ok($this->compiled[$workspace][$fileName]);
         }
 
         $source = File::open($fileName)->try($error);
@@ -76,24 +76,24 @@ class SuperstyleService {
             return error("Couldn't read file $fileName.\n$error");
         }
 
-        $this->sources[$sessionId] = $source;
+        $this->sources[$workspace] = $source;
 
         $compiled = Superstyle::compileAndRender($fileName, $source)->try($error);
         if ($error) {
             return error("Couldn't compile file $fileName.\n$error");
         }
 
-        if (!isset($this->compiled[$sessionId])) {
-            $this->compiled[$sessionId] = [];
+        if (!isset($this->compiled[$workspace])) {
+            $this->compiled[$workspace] = [];
         }
 
-        $this->compiled[$sessionId][$fileName] = $compiled;
+        $this->compiled[$workspace][$fileName] = $compiled;
 
         return ok($compiled);
     }
 
-    public function render(Accepts $accepts, string $sessionId, string $fileName):ResponseModifier {
-        $result = $this->compile($sessionId, $fileName)->try($error);
+    public function render(Accepts $accepts, string $workspace, string $fileName):ResponseModifier {
+        $result = $this->compile($workspace, $fileName)->try($error);
         if ($error) {
             return failure($error);
         }
