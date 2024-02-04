@@ -1,4 +1,6 @@
-Create a new project using
+Run with
 ```bash
-composer create-project catpaw/starter
+composer dev:watch
 ```
+
+Refer to [catpaw](https://github.com/tncrazvan/catpaw?tab=readme-ov-file#get-started) for more details.
