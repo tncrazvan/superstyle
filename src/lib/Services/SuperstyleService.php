@@ -3,18 +3,14 @@ namespace App\Services;
 
 use App\CompiledResult;
 use App\Superstyle;
-use function CatPaw\Core\asFileName;
-
 use CatPaw\Core\Attributes\Service;
 use function CatPaw\Core\error;
 use CatPaw\Core\File;
 use function CatPaw\Core\ok;
-
 use CatPaw\Core\Unsafe;
 use CatPaw\Web\Accepts;
 use function CatPaw\Web\failure;
 use CatPaw\Web\Interfaces\ResponseModifier;
-
 use function CatPaw\Web\success;
 use const CatPaw\Web\TEXT_HTML;
 
@@ -27,22 +23,22 @@ class SuperstyleService {
     /** @var array<string,CompiledResult> */
     private array $invalidating = [];
 
-    public function findStateBySessionId(string $sessionId):false|CompiledResult {
+    public function findCompiledResult(string $sessionId, string $fileName):false|CompiledResult {
         $result = false;
 
-        if (isset($this->compiled[$sessionId])) {
-            return $this->compiled[$sessionId] ?? false;
+        if (isset($this->compiled[$sessionId][$fileName])) {
+            return $this->compiled[$sessionId][$fileName] ?? false;
         }
 
         return $result;
     }
 
-    public function invalidate(string $sessionId):bool {
-        if (!$compiled = $this->findStateBySessionId($sessionId)) {
+    public function invalidate(string $sessionId, string $fileName):bool {
+        if (!$compiled = $this->findCompiledResult($sessionId, $fileName)) {
             return false;
         }
 
-        $this->invalidating[$sessionId] = $compiled;
+        $this->invalidating[$sessionId][$fileName] = $compiled;
 
         return true;
     }
@@ -52,25 +48,23 @@ class SuperstyleService {
      * @param  string                 $sessionId
      * @return Unsafe<CompiledResult>
      */
-    private function compile(string $sessionId) {
-        if (isset($this->invalidating[$sessionId])) {
-            $compiled = $this->compiled[$sessionId];
+    private function compile(string $sessionId, string $fileName) {
+        if (isset($this->invalidating[$sessionId][$fileName])) {
+            $compiled = $this->compiled[$sessionId][$fileName];
 
             $compiled = Superstyle::renderState($compiled->fileName, $compiled->source, $compiled->state)->try($error);
             if ($error) {
                 return error("Couldn't compile file $compiled->fileName.\n$error");
             }
 
-            $this->compiled[$sessionId] = $compiled;
+            $this->compiled[$sessionId][$fileName] = $compiled;
 
             return ok($compiled);
         }
 
-        if (isset($this->compiled[$sessionId])) {
-            return ok($this->compiled[$sessionId]);
+        if (isset($this->compiled[$sessionId][$fileName])) {
+            return ok($this->compiled[$sessionId][$fileName]);
         }
-
-        $fileName = asFileName(__DIR__, '../../scss/app.scss');
 
         $source = File::open($fileName)->try($error);
         if ($error) {
@@ -89,13 +83,17 @@ class SuperstyleService {
             return error("Couldn't compile file $fileName.\n$error");
         }
 
-        $this->compiled[$sessionId] = $compiled;
+        if (!isset($this->compiled[$sessionId])) {
+            $this->compiled[$sessionId] = [];
+        }
+
+        $this->compiled[$sessionId][$fileName] = $compiled;
 
         return ok($compiled);
     }
 
-    public function render(Accepts $accepts, string $sessionId):ResponseModifier {
-        $result = $this->compile($sessionId)->try($error);
+    public function render(Accepts $accepts, string $sessionId, string $fileName):ResponseModifier {
+        $result = $this->compile($sessionId, $fileName)->try($error);
         if ($error) {
             return failure($error);
         }

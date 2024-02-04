@@ -1,14 +1,15 @@
 <?php
 use App\Services\SuperstyleService;
+use function CatPaw\Core\asFileName;
 use CatPaw\Web\Accepts;
 use CatPaw\Web\Attributes\Produces;
 use CatPaw\Web\Attributes\SessionId;
-
 use function CatPaw\Web\failure;
-
 use const CatPaw\Web\INTERNAL_SERVER_ERROR;
 use const CatPaw\Web\OK;
 use const CatPaw\Web\TEXT_HTML;
+
+$fileName = asFileName(__DIR__, '../../scss/app.scss');
 
 return
 #[Produces(
@@ -28,8 +29,8 @@ function(
     SuperstyleService $service,
     #[SessionId]
     string $sessionId
-) {
-    if (!$compiled = $service->findStateBySessionId($sessionId)) {
+) use ($fileName) {
+    if (!$compiled = $service->findCompiledResult($sessionId, $fileName)) {
         return failure("Application not initialized.")->as(TEXT_HTML);
     }
 
@@ -37,9 +38,9 @@ function(
 
     $increaseCounter();
 
-    if (!$service->invalidate($sessionId)) {
+    if (!$service->invalidate($sessionId, $fileName)) {
         return failure("Could not invalidate application.")->as(TEXT_HTML);
     }
 
-    return $service->render($accepts, $sessionId);
+    return $service->render($accepts, $sessionId, $fileName);
 };

@@ -200,13 +200,14 @@ class Superstyle {
             ...$state,
             ...$parameters,
         ];
+
         $result = match ($operation) {
             'debug'  => self::compile_debug($composite, $child),
             'assign' => self::compile_assign($composite, $child),
             'return' => self::compile_return($composite, $child),
         };
 
-        foreach ($state as $key => $value) {
+        foreach (array_keys($state) as $key) {
             if (!isset($composite[$key])) {
                 continue;
             }
@@ -300,6 +301,7 @@ class Superstyle {
                 $type = $child[0];
                 match ($type) {
                     'assign' => self::compile_assign($state, $child),
+                    default  => '',
                 };
             }
         }
