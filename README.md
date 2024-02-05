@@ -3,10 +3,14 @@
 This is a proof of concept of how to use SCSS as a template system to render websites on the server.
 
 
-Run with
-```bash
-composer prod:start
-```
+# How to run
+
+- Make sure `php-yaml` is installed (don't ask).
+
+- Run with
+  ```bash
+  composer prod:start
+  ```
 
 # Debugging
 
