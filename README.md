@@ -5,10 +5,6 @@ This is a proof of concept of how to use SCSS as a template system to render web
 Here's an example (using [HTMX](https://htmx.org) for managing state)
 
 ```scss
-@function increaseByOne($value) {
-  @return $value + 1;
-}
-
 .noselect {
   -webkit-touch-callout: none; // iOS Safari
   -webkit-user-select: none; // Safari
