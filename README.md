@@ -7,7 +7,7 @@ This is a proof of concept of how to use SCSS as a template system to render web
 
 - Make sure `php-yaml` is installed (don't ask).
 
-- Run with
+- Run
   ```bash
   composer prod:start
   ```
