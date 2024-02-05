@@ -82,7 +82,7 @@ class Superstyle {
     }
 
     private static function findClosestFunctionByName(&$state, string $name):false|ClosestFunction {
-        foreach ($state['__functions'] as $nameLocal => $block) {
+        foreach ($state['__functions'] ?? [] as $nameLocal => $block) {
             if ($name === $nameLocal) {
                 return new ClosestFunction(
                     compiled: $state[$nameLocal],
